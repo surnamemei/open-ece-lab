@@ -96,6 +96,8 @@ def analyze_step(
             metrics["settling_time_s"], "s",
             f"time from which the response stays within +/-{settling_band * 100:g} % of the step size "
             f"around the final value, {origin}",
+            note=None if math.isfinite(metrics["settling_time_s"]) else
+            "did not settle: the last sample is still outside the settling band",
         ),
         "steady_state_error": Measurement(
             metrics.get("steady_state_error", math.nan), unit, "reference - final value", note=needs_reference),

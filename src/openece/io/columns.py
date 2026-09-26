@@ -4,11 +4,13 @@ For each role, in order:
 
 1. an explicit mapping always wins;
 2. otherwise a column whose name (ignoring case and unit annotations) is one of the role's
-   recognised names, e.g. ``time``, ``timestamp`` or ``t`` for the time role;
+   recognised names, e.g. ``time``, ``timestamp`` or ``t`` for the time role. Single-letter
+   names match case-sensitively (``T`` is usually a temperature, not time);
 3. otherwise, for roles that allow it, the single numeric column no other role has claimed.
 
 More than one candidate raises :class:`AmbiguousColumnError`; no candidate for a required role
-raises :class:`MissingColumnError`. How each column was chosen is returned so that it can be
+raises :class:`MissingColumnError`. An optional role whose only name match is unusable is left
+unassigned (the workflow reports it) rather than blocking the analysis. How each column was chosen is returned so that it can be
 recorded in the run record and shown to the user.
 """
 from __future__ import annotations
@@ -108,6 +110,8 @@ def resolve_columns(
                 f"{len(candidates)} columns have a recognised name ({_quoted(candidates)}). Specify it explicitly.",
                 role=role.key, candidates=candidates, available=dataset.column_names,
             )
+        if skipped and not role.required:
+            continue  # optional role: the workflow warns that the column could not be used
         if skipped:
             raise ColumnMappingError(
                 f"{source}: column {skipped[0].name!r} looks like the {role.description} column "
@@ -126,9 +130,13 @@ def resolve_columns(
         remaining = [c for c in dataset.columns if c.kind == "numeric" and claimed(c) is None]
         if len(remaining) > 1:
             names = [c.name for c in remaining]
+            layout = ""
+            if len(names) > dataset.n_rows:
+                layout = (f" The file has more columns than data rows ({dataset.n_rows}); samples must be in rows "
+                          "(one column per signal), so transpose data that was saved as a row.")
             raise AmbiguousColumnError(
                 f"{source}: cannot choose the {role.description} column automatically: "
-                f"{len(names)} candidate columns ({_quoted(names)}). Specify it explicitly.",
+                f"{len(names)} candidate columns ({_quoted(names)}). Specify it explicitly.{layout}",
                 role=role.key, candidates=names, available=dataset.column_names,
             )
         if remaining:
@@ -151,8 +159,17 @@ def _require(dataset: Dataset, roles: Sequence[ColumnRole], assigned: Mapping[st
 
 
 def _name_matches(name: str, names: set[str]) -> bool:
-    return normalize_name(parse_header(name).base) in names or normalize_name(name) in names
+    for candidate in (parse_header(name).base.strip(), name.strip()):
+        if len(candidate) == 1:
+            if candidate in names:  # exact case for single letters
+                return True
+        elif normalize_name(candidate) in names:
+            return True
+    return False
 
 
-def _quoted(names: Sequence[str]) -> str:
-    return ", ".join(repr(n) for n in names) if names else "(none)"
+def _quoted(names: Sequence[str], limit: int = 10) -> str:
+    if not names:
+        return "(none)"
+    shown = ", ".join(repr(n) for n in names[:limit])
+    return shown if len(names) <= limit else f"{shown} and {len(names) - limit} more"

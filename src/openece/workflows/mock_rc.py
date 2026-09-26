@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from pathlib import Path
 
 from ..errors import ConfigurationError
 from ..instruments.mock import MockOscilloscope, MockRCPlant, MockSignalGenerator
 from ..measurements.frequency_sweep import run_frequency_sweep
-from ..recipes.loader import load_recipe
+from ..recipes.loader import read_recipe
 from ..validation import Requirement, requirements_from_mapping
 from .bode import ANALYSIS, bode_figures, bode_results
 from .common import integer, number
@@ -17,12 +16,12 @@ from .outcome import AnalysisOutcome, DataTable
 DROP_DB = 3.0
 
 
-def run_mock_rc_sweep(recipe_path: str | Path) -> tuple[AnalysisOutcome, list[Requirement]]:
+def run_mock_rc_sweep(recipe_path) -> tuple[AnalysisOutcome, list[Requirement]]:
     """Run the recipe's sine sweep on a simulated RC plant and analyse it like any Bode data.
 
     Returns the outcome and the recipe's requirements (not yet applied).
     """
-    recipe = load_recipe(recipe_path)
+    recipe, raw = read_recipe(recipe_path)
     where = str(recipe_path)
     plant_cfg = _section(recipe.get("mock_plant") or {}, "mock_plant", where)
     stimulus = _section(recipe["stimulus"], "stimulus", where)
@@ -60,7 +59,7 @@ def run_mock_rc_sweep(recipe_path: str | Path) -> tuple[AnalysisOutcome, list[Re
             "nominal_cutoff_hz": plant.cutoff_hz,
         },
         "recipe": {
-            "path": where, "name": title, "sha256": hashlib.sha256(Path(recipe_path).read_bytes()).hexdigest(),
+            "path": where, "name": title, "sha256": hashlib.sha256(raw).hexdigest(),
         },
     }
     parameters = {

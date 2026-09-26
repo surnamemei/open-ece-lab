@@ -139,6 +139,22 @@ def test_record_round_trip_and_schema_checks(tmp_path):
         load_record(bad)
 
 
+def test_default_runs_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENECE_RUNS_DIR", str(tmp_path / "explicit"))
+    assert records.default_runs_dir() == tmp_path / "explicit"
+    monkeypatch.delenv("OPENECE_RUNS_DIR")
+    monkeypatch.setattr(records.sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    assert records.default_runs_dir() == tmp_path / "xdg" / "openece" / "runs"
+    monkeypatch.setenv("XDG_DATA_HOME", "relative/path")  # not absolute: ignored per the XDG spec
+    assert records.default_runs_dir() == Path.home() / ".local" / "share" / "openece" / "runs"
+    monkeypatch.setattr(records.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    assert records.default_runs_dir() == tmp_path / "local" / "OpenECE" / "runs"
+    monkeypatch.setattr(records.sys, "platform", "darwin")
+    assert records.default_runs_dir() == Path.home() / "Library" / "Application Support" / "OpenECE" / "runs"
+
+
 def test_software_info_is_a_fresh_copy():
     info = software_info()
     assert info["version"] == openece.__version__
@@ -153,3 +169,46 @@ def test_to_jsonable_converts_numpy_and_non_finite_values():
     assert to_jsonable(value) == {"a": 1.5, "b": 3, "c": True, "d": [None, None, 2.0], "e": [1, 2], "f": "x", "g": [1, None]}
     with pytest.raises(TypeError):
         to_jsonable({"x": object()})
+
+
+def test_malformed_records_are_skipped_not_fatal(tmp_path):
+    store = RunStore(tmp_path)
+    good, bad = save_run(make_outcome(), store), save_run(make_outcome(), store)
+    data = json.loads(bad.record_path.read_text(encoding="utf-8"))
+    data["analysis"] = "bode"  # hand-edited into the wrong type
+    bad.record_path.write_text(json.dumps(data), encoding="utf-8")
+    found, problems = store.records()
+    assert [r.run_id for r in found] == [good.record.run_id]
+    assert len(problems) == 1 and "'analysis' must be a JSON object" in problems[0]
+
+
+def test_a_failing_figure_leaves_no_run_directory(tmp_path):
+    def broken():
+        raise RuntimeError("plotting failed")
+    with pytest.raises(RuntimeError):
+        save_run(make_outcome(figures=broken), RunStore(tmp_path))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_undecodable_file_name_bytes_are_stored_escaped(tmp_path):
+    name = "bad\udcffname.csv"  # how Python represents a non-UTF-8 byte in a POSIX file name
+    saved = save_run(make_outcome(source={"kind": "file", "path": name, "sha256": "0" * 64}), RunStore(tmp_path))
+    record = json.loads(saved.record_path.read_bytes().decode("utf-8"))
+    assert record["source"]["path"] == "bad\\udcffname.csv"
+    assert "bad\\udcffname.csv" in saved.report_path.read_text(encoding="utf-8")
+
+
+def test_record_rename_is_retried_while_windows_holds_the_file(tmp_path, monkeypatch):
+    run = RunStore(tmp_path).create_run("bode")
+    record = RunRecord(run.run_id, run.created.isoformat(), {"type": "bode"}, {}, {}, {"overall": "NOT_EVALUATED"}, (), {})
+    real_replace, calls = records.os.replace, []
+
+    def flaky(src, dst):
+        calls.append(src)
+        if len(calls) < 3:
+            raise PermissionError("file in use")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(records.os, "replace", flaky)
+    monkeypatch.setattr(records.time, "sleep", lambda s: None)
+    assert run.write_record(record).is_file() and len(calls) == 3

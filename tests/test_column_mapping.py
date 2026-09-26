@@ -93,3 +93,25 @@ def test_mapping_errors_are_user_facing_not_key_errors(write_text):
         resolve(write_text("d.csv", "a,b,c\n1,2,3\n"))
     assert not isinstance(err.value, KeyError)
     assert isinstance(err.value, ValueError)
+
+
+def test_single_letter_names_match_case_sensitively(write_text):
+    assert resolve(write_text("a.csv", "t,v\n0,1\n1,2\n"))["time"].column.name == "t"
+    with pytest.raises(MissingColumnError):  # 'T' is usually a temperature, never silently time
+        resolve(write_text("b.csv", "T (degC),v\n20,1\n21,2\n"))
+
+
+def test_an_unusable_optional_column_does_not_block(write_text):
+    roles = (ColumnRole("x", "x", ("x",)), ColumnRole("phase", "phase", ("phase",), required=False))
+    mapping = resolve_columns(load_csv(write_text("p.csv", "x,phase\n1,-3°\n2,-5°\n")), roles)
+    assert "phase" not in mapping
+    required = (ColumnRole("x", "x", ("x",)), ColumnRole("phase", "phase", ("phase",)))
+    with pytest.raises(ColumnMappingError, match="cannot be used"):
+        resolve_columns(load_csv(write_text("q.csv", "x,phase\n1,-3°\n2,-5°\n")), required)
+
+
+def test_long_candidate_lists_are_shortened_and_explain_the_layout(write_text):
+    row = ",".join(str(i) for i in range(50))
+    with pytest.raises(AmbiguousColumnError) as err:
+        resolve(write_text("row.csv", f"{row}\n"), {"time": "column_1"})
+    assert "and 39 more" in str(err.value) and "transpose" in str(err.value)

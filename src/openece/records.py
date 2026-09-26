@@ -1,8 +1,9 @@
 """Persistent, append-only measurement records (run provenance) stored as JSON.
 
-Every run gets its own directory under a runs root, named after its run ID::
+Every run gets its own directory under a runs root (by default outside any source checkout,
+see :func:`default_runs_dir`), named after its run ID::
 
-    runs/20260926T170412Z-bode-3f9a2c1d/
+    <runs root>/20260926T170412Z-bode-3f9a2c1d/
         record.json     machine-readable record (schema "openece.run-record", version 1)
         report.html     human-readable report
         *.png, *.csv    figures and data artifacts
@@ -23,6 +24,8 @@ import platform
 import re
 import secrets
 import subprocess
+import sys
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,13 +41,39 @@ from .errors import RecordError
 SCHEMA = "openece.run-record"
 SCHEMA_VERSION = 1
 RECORD_FILENAME = "record.json"
+RUNS_DIR_ENV = "OPENECE_RUNS_DIR"
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 _FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
+def default_runs_dir() -> Path:
+    """Where runs are stored when no directory is given.
+
+    ``$OPENECE_RUNS_DIR`` if set, otherwise the per-user data directory, never the current
+    directory, so records do not end up inside a source checkout by accident:
+
+    - Linux: ``$XDG_DATA_HOME/openece/runs`` (default ``~/.local/share/openece/runs``)
+    - Windows: ``%LOCALAPPDATA%\\OpenECE\\runs``
+    - macOS: ``~/Library/Application Support/OpenECE/runs``
+    """
+    override = os.environ.get(RUNS_DIR_ENV)
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "OpenECE" / "runs"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "OpenECE" / "runs"
+    base = os.environ.get("XDG_DATA_HOME")
+    root = Path(base) if base and Path(base).is_absolute() else Path.home() / ".local" / "share"
+    return root / "openece" / "runs"
+
+
 def to_jsonable(value: Any) -> Any:
     """Convert records to plain JSON types; NaN/inf become ``None``."""
-    if value is None or isinstance(value, (str, bool)):
+    if isinstance(value, str):
+        return _clean_text(value)
+    if value is None or isinstance(value, bool):
         return value
     if isinstance(value, np.bool_):
         return bool(value)
@@ -54,7 +83,7 @@ def to_jsonable(value: Any) -> Any:
         number = float(value)
         return number if math.isfinite(number) else None
     if isinstance(value, Mapping):
-        return {str(k): to_jsonable(v) for k, v in value.items()}
+        return {_clean_text(str(k)): to_jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [to_jsonable(v) for v in value]
     if isinstance(value, np.ndarray):
@@ -66,6 +95,15 @@ def to_jsonable(value: Any) -> Any:
     if hasattr(value, "to_dict"):
         return to_jsonable(value.to_dict())
     raise TypeError(f"cannot store a {type(value).__name__} in a run record")
+
+
+def _clean_text(text: str) -> str:
+    """File names can carry undecodable bytes (lone surrogates): keep them visible but valid UTF-8."""
+    try:
+        text.encode("utf-8")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -131,6 +169,16 @@ class RunRecord:
             raise RecordError(
                 f"unsupported record schema_version {version!r} (this software reads up to {SCHEMA_VERSION})"
             )
+        for key in ("analysis", "source", "results", "validation"):
+            if not isinstance(data.get(key), Mapping):
+                raise RecordError(f"malformed run record: {key!r} must be a JSON object")
+        if not isinstance(data.get("run_id"), str) or not isinstance(data.get("created_utc"), str):
+            raise RecordError("malformed run record: 'run_id' and 'created_utc' must be strings")
+        artifacts, warnings = data.get("artifacts", []), data.get("warnings", [])
+        if not isinstance(artifacts, list) or not all(isinstance(a, Mapping) for a in artifacts):
+            raise RecordError("malformed run record: 'artifacts' must be a list of objects")
+        if not isinstance(warnings, list) or not isinstance(data.get("software", {}), Mapping):
+            raise RecordError("malformed run record: 'warnings' must be a list and 'software' an object")
         try:
             return cls(
                 run_id=data["run_id"],
@@ -194,7 +242,7 @@ class RunDirectory:
         return PurePosixPath(name).as_posix()
 
     def write_text(self, name: str, text: str) -> str:
-        return self.write_bytes(name, text.encode("utf-8"))
+        return self.write_bytes(name, text.encode("utf-8", "backslashreplace"))
 
     def write_record(self, record: RunRecord) -> Path:
         final = self.path / RECORD_FILENAME
@@ -204,10 +252,23 @@ class RunDirectory:
         try:
             with open(partial, "xb") as fh:
                 fh.write(record.to_json().encode("utf-8"))
-            os.replace(partial, final)
+            _replace(partial, final)
         except OSError as exc:
             raise RecordError(f"cannot write run record {final}: {exc.strerror or exc}") from exc
         return final
+
+
+def _replace(source: Path, target: Path, attempts: int = 5) -> None:
+    """``os.replace`` with a short retry: on Windows, antivirus or the search indexer can briefly
+    hold a file that was just written."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * 2**attempt)
 
 
 class RunStore:

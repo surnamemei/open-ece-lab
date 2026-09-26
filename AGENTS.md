@@ -39,6 +39,7 @@ Build a hardware-agnostic engineering measurement and validation tool. The same 
 ## Records and provenance rules
 - Every analysis or measurement run saved through `workflows.save_run` produces `record.json` (schema `openece.run-record`). Bump `SCHEMA_VERSION` in `records.py` for any incompatible change and keep `RunRecord.from_dict` able to read older versions.
 - Run folders and their files are created exclusively and never modified afterwards. Never add code that overwrites or deletes a run.
+- By default, runs are stored outside any source checkout (`records.default_runs_dir()`: `$OPENECE_RUNS_DIR`, else the per-user data directory), never in the current directory. Tests must not write there: `tests/conftest.py` points `OPENECE_RUNS_DIR` at a temporary directory for every test.
 - Every result carries an explicit unit (`"1"` = dimensionless, `None` = unknown). Undeterminable values are NaN in memory and `null` with a note in JSON.
 - Record the source file's path and SHA-256, every effective parameter (including how columns were chosen), warnings, and software versions.
 

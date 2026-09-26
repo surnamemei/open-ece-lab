@@ -30,6 +30,13 @@ _DELIMITER_ALIASES = {
 }
 _DELIMITER_LABELS = {",": "comma", ";": "semicolon", "\t": "tab", "whitespace": "whitespace"}
 _CANDIDATE_DELIMITERS = (",", ";", "\t")
+# A consistent tab or semicolon split beats a comma split: commas are then decimal commas.
+_DELIMITER_PRIORITY = {"\t": 2, ";": 1, ",": 0}
+_BOMS = (
+    (codecs.BOM_UTF32_LE, "utf-32"), (codecs.BOM_UTF32_BE, "utf-32"),  # before UTF-16: same first bytes
+    (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16"),
+)
+_INTEGER = re.compile(r"^[+-]?\d+$")
 _SNIFF_ROWS = 50
 _MAX_COMMENTS = 100
 _MAX_UNIT_LENGTH = 16
@@ -65,8 +72,7 @@ def load_csv(
     if header not in (None, True, False):
         raise DataImportError(f"header must be True, False or None (auto), got {header!r}")
 
-    raw = _read_bytes(path)
-    source = SourceInfo.from_path(path, "csv", raw)
+    source, raw = SourceInfo.read(path, "csv")
     text, used_encoding, warnings = _decode(raw, encoding, name)
 
     comments: list[str] = []
@@ -153,6 +159,12 @@ def load_csv(
             else:
                 skipped.append(_describe_bad_column(col_name, cells, row_lines, bad, filled, first_bad, decimal))
 
+    if (not header and delimiter == "," and decimal == "." and len(columns) == 2 and not skipped
+            and all(_INTEGER.match(c) for _, cells in data_rows for c in cells if c)):
+        warnings.append(
+            f"{name} has no header and two integer columns; if the values use a decimal comma "
+            "(e.g. '2,309' meaning 2.309), set the decimal separator to ','"
+        )
     if not columns:
         details = "; ".join(f"{s.name!r}: {s.reason}" for s in skipped) or "no columns"
         if any(s.hint == "decimal" for s in skipped):
@@ -193,6 +205,8 @@ def _normalize_delimiter(delimiter: str | None) -> str | None:
     if delimiter is None:
         return None
     resolved = _DELIMITER_ALIASES.get(delimiter.lower(), delimiter)
+    if resolved in ('"', "\r", "\n"):
+        raise DataImportError(f"invalid delimiter {delimiter!r}", hint="delimiter")
     if resolved != "whitespace" and len(resolved) != 1:
         raise DataImportError(
             f"invalid delimiter {delimiter!r}: use a single character or one of comma, semicolon, tab, whitespace",
@@ -201,29 +215,26 @@ def _normalize_delimiter(delimiter: str | None) -> str | None:
     return resolved
 
 
-def _read_bytes(path: Path) -> bytes:
-    if not path.exists():
-        raise DataImportError(f"input file not found: {path}")
-    if not path.is_file():
-        raise DataImportError(f"not a regular file: {path}")
-    try:
-        return path.read_bytes()
-    except OSError as exc:
-        raise DataImportError(f"cannot read {path}: {exc.strerror or exc}") from exc
-
-
 def _decode(raw: bytes, encoding: str | None, name: str) -> tuple[str, str, list[str]]:
     if encoding:
         try:
-            return raw.decode(encoding), encoding, []
+            text = raw.decode(encoding)
+            return (text[1:] if text.startswith("\ufeff") else text), encoding, []
         except LookupError as exc:
             raise DataImportError(f"unknown text encoding {encoding!r}", hint="encoding") from exc
         except UnicodeDecodeError as exc:
             raise DataImportError(
                 f"{name}: cannot be decoded as {encoding} ({exc.reason} at byte {exc.start})", hint="encoding"
             ) from exc
-    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
-        return raw.decode("utf-16"), "utf-16", []
+    for bom, codec in _BOMS:
+        if raw.startswith(bom):
+            try:
+                return raw.decode(codec), codec, []
+            except UnicodeDecodeError as exc:
+                raise DataImportError(
+                    f"{name}: cannot be decoded as {codec.upper()} ({exc.reason}); the file may be truncated",
+                    hint="encoding",
+                ) from exc
     if b"\x00" in raw[:4096]:
         raise DataImportError(
             f"{name}: does not look like a text file (it contains NUL bytes); check the file type", hint="format"
@@ -241,11 +252,14 @@ def _detect_delimiter(lines: list[str], decimal: str) -> str:
     candidates = [d for d in _CANDIDATE_DELIMITERS if not (decimal == "," and d == ",")]
     best, best_score = None, None
     for delim in candidates:
-        counts = [len(cells) for cells in csv.reader(lines, delimiter=delim)]
+        try:
+            counts = [len(cells) for cells in csv.reader(lines, delimiter=delim)]
+        except csv.Error:
+            continue  # e.g. a whole line exceeds the csv field limit when split this way
         if not counts or max(counts) <= 1:
             continue
         mode = max(set(counts), key=counts.count)
-        score = (min(counts) == max(counts), counts.count(mode) / len(counts), mode)
+        score = (min(counts) == max(counts), counts.count(mode) / len(counts), _DELIMITER_PRIORITY[delim], mode)
         if best_score is None or score > best_score:
             best, best_score = delim, score
     if best is not None:
@@ -262,8 +276,10 @@ def _split_rows(content: list[tuple[int, str]], delimiter: str, name: str) -> li
         for lineno, text in content:
             rows.append((lineno, text.split()))
         return rows
-    reader = csv.reader((text for _, text in content), delimiter=delimiter, skipinitialspace=True)
-    index = 0
+    try:
+        reader = csv.reader((text for _, text in content), delimiter=delimiter, skipinitialspace=True)
+    except (TypeError, ValueError, csv.Error) as exc:
+        raise DataImportError(f"invalid delimiter {delimiter!r}: {exc}", hint="delimiter") from exc
     try:
         for index, cells in enumerate(reader):
             if reader.line_num != index + 1:
@@ -274,8 +290,8 @@ def _split_rows(content: list[tuple[int, str]], delimiter: str, name: str) -> li
             if any(cells):
                 rows.append((content[index][0], cells))
     except csv.Error as exc:
-        lineno = content[min(index, len(content) - 1)][0]
-        raise DataImportError(f"{name}: line {lineno}: {exc}") from exc
+        lineno = content[min(max(reader.line_num, 1), len(content)) - 1][0]  # the line being read
+        raise DataImportError(f"{name}: line {lineno}: {exc}; check the delimiter", hint="delimiter") from exc
     return rows
 
 

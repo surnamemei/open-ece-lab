@@ -76,3 +76,18 @@ def test_magnitude_kind(unit, expected):
 def test_magnitude_kind_unknown():
     with pytest.raises(UnitError):
         magnitude_kind("furlongs")
+
+
+@pytest.mark.parametrize("header, base, unit, annotation", [
+    ("Voltage (CH1)", "Voltage", None, "CH1"),         # a channel label is not a unit
+    ("Speed (motor A)", "Speed", None, "motor A"),
+    ("Time (samples)", "Time", None, "samples"),
+    ("Accel (m/s^2)", "Accel", "m/s^2", None),          # compounds of known units are units
+    ("rate (1/s)", "rate", "1/s", None),
+    ("Area (m²)", "Area", "m²", None),
+    ("Temp [CH1]", "Temp", "CH1", None),                # square brackets always hold a unit
+    ("freq_MHz", "freq", "MHz", None),                  # suffix keeps its case: MHz != mHz
+    ("freq_mHz", "freq", "mHz", None),
+])
+def test_units_versus_annotations(header, base, unit, annotation):
+    assert parse_header(header) == type(parse_header(header))(base, unit, annotation)

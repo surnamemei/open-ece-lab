@@ -9,7 +9,7 @@ import numpy as np
 from ..analysis.electronics import estimate_cutoff_hz, interpolate_at_frequency, magnitude_to_db, unwrap_phase_deg
 from ..errors import AnalysisError, ConfigurationError
 from ..io import ColumnRole, Dataset, resolve_columns
-from ..io.columns import FREQUENCY_NAMES, MAGNITUDE_NAMES, PHASE_NAMES
+from ..io.columns import FREQUENCY_NAMES, MAGNITUDE_NAMES, PHASE_NAMES, match_by_name
 from ..io.dataset import Column
 from ..units import UnitError, frequency_scale_to_hz, magnitude_kind, phase_scale_to_degrees
 from .common import column_values, file_source, mapping_dict, number, unit_scale
@@ -49,6 +49,10 @@ def analyze_bode(
         )
     mapping = resolve_columns(dataset, ROLES, columns)
     warnings = list(dataset.warnings)
+    if "phase" not in mapping:
+        for unusable in match_by_name(dataset, ROLES[2])[1]:
+            warnings.append(f"column {unusable.name!r} looks like phase data but cannot be used "
+                            f"({unusable.reason}); the analysis continues without phase")
 
     f_col = mapping["frequency"].column
     f_scale, f_unit = unit_scale(f_col, frequency_unit, quantity="frequency", convert=frequency_scale_to_hz,
@@ -130,7 +134,7 @@ def bode_results(frequency_hz, magnitude_db, phase_deg=None, *, drop_db: float =
             phase_at_cutoff, "deg", "phase at the cutoff frequency (unwrapped, log-frequency interpolation)")
     else:
         results["phase_at_cutoff_deg"] = Measurement(
-            math.nan, "deg", "phase at the cutoff frequency", note="not available: the data has no phase column")
+            math.nan, "deg", "phase at the cutoff frequency", note="not available: no usable phase column")
     warnings = []
     if not math.isfinite(cutoff):
         if peak == len(m) - 1:
@@ -185,7 +189,8 @@ def _frequency_order(frequency: np.ndarray, dataset: Dataset, column: Column, wa
     if np.all(steps < 0):
         warnings.append("the sweep runs from high to low frequency; it was reversed for analysis")
         return np.arange(len(frequency))[::-1]
-    against = np.flatnonzero(steps <= 0) if frequency[-1] > frequency[0] else np.flatnonzero(steps >= 0)
+    increasing = np.count_nonzero(steps > 0) >= np.count_nonzero(steps < 0)  # the sweep's main direction
+    against = np.flatnonzero(steps <= 0) if increasing else np.flatnonzero(steps >= 0)
     first = int(against[0]) + 1
     raise AnalysisError(
         f"{where}: frequency column {column.name!r} is not monotonic (repeated or out-of-order value at "

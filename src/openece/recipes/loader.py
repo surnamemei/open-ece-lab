@@ -17,13 +17,18 @@ SPEC_KEYS = {"name", "description", "analysis", "parameters", "requirements"}
 
 def load_recipe(path):
     """Load a measurement recipe (YAML mapping with at least name, stimulus and requirements)."""
-    data, _ = read_yaml(path)
+    return read_recipe(path)[0]
+
+
+def read_recipe(path) -> tuple[Mapping, bytes]:
+    """Like :func:`load_recipe`, plus the exact bytes that were parsed (for the record's checksum)."""
+    data, raw = read_yaml(path)
     if not isinstance(data, Mapping):
         raise ConfigurationError(f"{path}: a recipe must be a YAML mapping")
     missing = REQUIRED - set(data or {})
     if missing:
         raise ConfigurationError(f"recipe missing fields: {sorted(missing)}")
-    return data
+    return data, raw
 
 
 @dataclass(frozen=True)

@@ -32,21 +32,25 @@ class SavedRun:
 
 def save_run(outcome: AnalysisOutcome, store: RunStore, *, invocation: Mapping[str, Any] | None = None,
              now: datetime | None = None) -> SavedRun:
-    """Create a new run directory and write every artifact and the record. Never overwrites."""
+    """Create a new run directory and write every artifact and the record. Never overwrites.
+
+    Figures are rendered before the directory is created, so a plotting failure leaves nothing behind.
+    """
+    pngs: dict[str, tuple[str, bytes]] = {}
+    if outcome.figures is not None:
+        from ..reporting.plots import figure_to_png
+
+        for filename, (description, figure) in outcome.figures().items():
+            pngs[filename] = (description, figure_to_png(figure))
+
     run = store.create_run(outcome.analysis, now=now)
     artifacts: list[Artifact] = []
     origin = _origin_comment(outcome)
     for filename, table in outcome.tables.items():
         text = _table_csv(table, [f"OpenECE Lab run {run.run_id}: {table.description}", origin])
         artifacts.append(Artifact(run.write_text(filename, text), "data", "text/csv", table.description))
-
-    pngs: dict[str, bytes] = {}
-    if outcome.figures is not None:
-        from ..reporting.plots import figure_to_png
-
-        for filename, (description, figure) in outcome.figures().items():
-            pngs[filename] = figure_to_png(figure)
-            artifacts.append(Artifact(run.write_bytes(filename, pngs[filename]), "figure", "image/png", description))
+    for filename, (description, png) in pngs.items():
+        artifacts.append(Artifact(run.write_bytes(filename, png), "figure", "image/png", description))
 
     artifacts.append(Artifact(REPORT_FILENAME, "report", "text/html", "human-readable report"))
     record = RunRecord(
@@ -61,7 +65,7 @@ def save_run(outcome: AnalysisOutcome, store: RunStore, *, invocation: Mapping[s
         warnings=outcome.warnings,
         invocation=invocation,
     )
-    run.write_text(REPORT_FILENAME, render_run_report(record.to_dict(), pngs))
+    run.write_text(REPORT_FILENAME, render_run_report(record.to_dict(), {k: png for k, (_, png) in pngs.items()}))
     run.write_record(record)
     return SavedRun(record, run.path)
 

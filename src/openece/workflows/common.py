@@ -10,7 +10,7 @@ import numpy as np
 from ..errors import AnalysisError, ConfigurationError
 from ..io import ColumnAssignment, Dataset
 from ..io.dataset import Column
-from ..units import UnitError, time_scale_to_seconds
+from ..units import UnitError, parse_header, time_scale_to_seconds
 
 
 def number(value: Any, name: str, *, positive: bool = False, minimum: float | None = None,
@@ -65,6 +65,13 @@ def unit_scale(column: Column, override: str | None, *, quantity: str, convert: 
     """
     unit = override or column.unit
     if unit is None:
+        annotation = parse_header(column.name).annotation
+        if annotation is not None:
+            raise AnalysisError(
+                f"{where}: {quantity} column {column.name!r}: '({annotation})' is not a recognised {quantity} unit; "
+                f"specify the {quantity} unit explicitly",
+                hint=hint,
+            )
         if default is None:
             raise AnalysisError(
                 f"{where}: {quantity} column {column.name!r} has no unit in its header; specify the {quantity} unit explicitly",

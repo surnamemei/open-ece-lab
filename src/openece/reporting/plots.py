@@ -31,7 +31,7 @@ def bode_figure(frequency_hz, magnitude_db, phase_deg=None, *, cutoff_hz=math.na
         for axis in axes:
             axis.axvline(cutoff_hz, linestyle=":", linewidth=1.3, color="C3")
         ax.plot([], [], linestyle=":", color="C3", label=f"cutoff {cutoff_hz:.4g} Hz")
-    ax.set_ylabel(f"Magnitude ({magnitude_unit})")
+    ax.set_ylabel(_plain(f"Magnitude ({magnitude_unit})"), parse_math=False)
     ax.legend(loc="best", fontsize="small")
     if phase_deg is not None:
         axes[1].semilogx(frequency_hz, phase_deg, marker=".", markersize=3, linewidth=1.2, color="C1")
@@ -58,7 +58,7 @@ def step_figure(time_s, response, *, final, band_abs, peak, peak_time_s, settlin
     if math.isfinite(settling_time_s):
         ax.axvline(settling_time_s, linestyle=":", color="C3", label=f"settled at {settling_time_s:.4g} s")
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel(f"Response ({response_unit or 'unit not specified'})")
+    ax.set_ylabel(_plain(f"Response ({response_unit or 'unit not specified'})"), parse_math=False)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best", fontsize="small")
     _title(fig, title)
@@ -78,7 +78,7 @@ def signal_figure(time_s, signal, frequency_hz, amplitude, psd_frequency_hz, psd
     shown = min(shown, n)
     axes[0].plot(time_s[:shown], signal[:shown], linewidth=0.9)
     axes[0].set_xlabel("Time (s)")
-    axes[0].set_ylabel(f"Signal ({label})")
+    axes[0].set_ylabel(_plain(f"Signal ({label})"), parse_math=False)
     axes[0].set_title(f"Waveform (first {shown} of {n} samples)", fontsize="small")
 
     tiny = np.finfo(float).tiny
@@ -87,12 +87,12 @@ def signal_figure(time_s, signal, frequency_hz, amplitude, psd_frequency_hz, psd
     if math.isfinite(dominant_hz):
         axes[1].axvline(dominant_hz, linestyle=":", color="C3", label=f"dominant {dominant_hz:.6g} Hz")
         axes[1].legend(loc="best", fontsize="small")
-    axes[1].set_ylabel(f"Amplitude (dB re 1 {label})")
+    axes[1].set_ylabel(_plain(f"Amplitude (dB re 1 {label})"), parse_math=False)
     axes[1].set_xlabel("Frequency (Hz)")
 
     pf, pv = _max_hold(np.asarray(psd_frequency_hz)[1:], np.asarray(psd)[1:])
     axes[2].semilogx(pf, 10 * np.log10(np.maximum(pv, tiny)), linewidth=0.9, color="C1")
-    axes[2].set_ylabel(f"PSD (dB re 1 {label}^2/Hz)")
+    axes[2].set_ylabel(_plain(f"PSD (dB re 1 {label}^2/Hz)"), parse_math=False)
     axes[2].set_xlabel("Frequency (Hz)")
     for axis in axes:
         axis.grid(True, which="both", alpha=0.3)
@@ -109,7 +109,12 @@ def _figure(rows: int, row_height: float, width: float = 8.0):
 
 def _title(fig, title: str) -> None:
     if title:
-        fig.suptitle(title)
+        fig.suptitle(_plain(title), parse_math=False)
+
+
+def _plain(text: str) -> str:
+    """Text from files or users: displayable as-is (no mathtext; undecodable file-name bytes escaped)."""
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 def _max_hold(x: np.ndarray, y: np.ndarray):

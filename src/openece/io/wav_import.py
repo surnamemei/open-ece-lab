@@ -9,6 +9,7 @@ mixed down or dropped; analyses must select one explicitly when there is more th
 """
 from __future__ import annotations
 
+import io
 import struct
 import warnings
 from pathlib import Path
@@ -20,19 +21,18 @@ from ..errors import DataImportError
 from .dataset import Column, Dataset, SourceInfo
 
 FULL_SCALE_UNIT = "FS"
-_MAX_INFO_BYTES = 1 << 16
 _FORMAT_NAMES = {1: "PCM", 3: "IEEE float", 6: "A-law", 7: "mu-law"}
 
 
 def load_wav(path: str | Path) -> Dataset:
     """Load a WAV file; the sample rate and format details are exposed in the dataset."""
     path = Path(path)
-    source = SourceInfo.from_path(path, "wav")
-    header = _read_riff_chunks(path)
+    source, raw = SourceInfo.read(path, "wav")
+    header = _read_riff_chunks(raw, path.name)
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            rate, data = wavfile.read(path, mmap=False)
+            rate, data = wavfile.read(io.BytesIO(raw), mmap=False)
     except Exception as exc:  # the parser raises assorted errors for malformed files
         raise DataImportError(f"{path.name}: cannot read WAV data ({exc})") from exc
     if rate <= 0:
@@ -62,43 +62,36 @@ def load_wav(path: str | Path) -> Dataset:
         "info": header.get("info", {}),
     }
     # Reader warnings can mean damaged data (e.g. a truncated recording), so they are surfaced.
-    notices = tuple(f"{path.name}: {message}" for message in metadata["reader_warnings"])
-    return Dataset(source=source, columns=columns, sample_rate_hz=float(rate), metadata=metadata, warnings=notices)
+    notices = [f"{path.name}: {message}" for message in metadata["reader_warnings"]]
+    declared = header.get("data_bytes", 0) // header["block_align"] if header.get("block_align") else 0
+    if not header.get("rf64") and declared > frames:
+        notices.append(f"{path.name}: the data chunk declares {declared} frames but the file holds only {frames}; "
+                       "the recording is truncated")
+    return Dataset(source=source, columns=columns, sample_rate_hz=float(rate), metadata=metadata,
+                   warnings=tuple(notices))
 
 
-def _read_riff_chunks(path: Path) -> dict:
-    """Check the RIFF/WAVE signature; return the format tag, bit depth and LIST/INFO text if present."""
-    found: dict = {}
-    try:
-        with path.open("rb") as fh:
-            riff = fh.read(12)
-            if len(riff) < 12 or riff[:4] not in (b"RIFF", b"RIFX", b"RF64") or riff[8:12] != b"WAVE":
-                raise DataImportError(f"{path.name}: not a WAV file (missing RIFF/WAVE header)", hint="format")
-            endian = ">" if riff[:4] == b"RIFX" else "<"
-            while True:
-                chunk = fh.read(8)
-                if len(chunk) < 8:
-                    return found
-                chunk_id, size = chunk[:4], struct.unpack(endian + "I", chunk[4:])[0]
-                if chunk_id == b"fmt ":
-                    body = fh.read(size)
-                    if len(body) >= 16:
-                        tag, _channels, _rate, _byte_rate, _align, bits = struct.unpack(endian + "HHIIHH", body[:16])
-                        if tag == 0xFFFE and len(body) >= 26:  # WAVE_FORMAT_EXTENSIBLE: use the sub-format
-                            tag = struct.unpack(endian + "H", body[24:26])[0]
-                        found.update(format_tag=tag, bits_per_sample=bits)
-                    if size & 1:
-                        fh.seek(1, 1)
-                elif chunk_id == b"LIST" and size <= _MAX_INFO_BYTES:
-                    body = fh.read(size)
-                    if body[:4] == b"INFO":
-                        found["info"] = _parse_info(body[4:], endian)
-                    if size & 1:
-                        fh.seek(1, 1)
-                else:
-                    fh.seek(size + (size & 1), 1)
-    except OSError as exc:
-        raise DataImportError(f"cannot read {path}: {exc.strerror or exc}") from exc
+def _read_riff_chunks(raw: bytes, name: str) -> dict:
+    """Check the RIFF/WAVE signature; return format details, the declared data size and INFO text."""
+    if len(raw) < 12 or raw[:4] not in (b"RIFF", b"RIFX", b"RF64") or raw[8:12] != b"WAVE":
+        raise DataImportError(f"{name}: not a WAV file (missing RIFF/WAVE header)", hint="format")
+    endian = ">" if raw[:4] == b"RIFX" else "<"
+    found: dict = {"rf64": raw[:4] == b"RF64"}  # RF64 keeps real sizes in a ds64 chunk: no size check
+    pos = 12
+    while pos + 8 <= len(raw):
+        chunk_id, size = raw[pos:pos + 4], struct.unpack(endian + "I", raw[pos + 4:pos + 8])[0]
+        body = raw[pos + 8:pos + 8 + size]
+        if chunk_id == b"fmt " and len(body) >= 16:
+            tag, _channels, _rate, _byte_rate, align, bits = struct.unpack(endian + "HHIIHH", body[:16])
+            if tag == 0xFFFE and len(body) >= 26:  # WAVE_FORMAT_EXTENSIBLE: use the sub-format
+                tag = struct.unpack(endian + "H", body[24:26])[0]
+            found.update(format_tag=tag, bits_per_sample=bits, block_align=align)
+        elif chunk_id == b"data":
+            found["data_bytes"] = size
+        elif chunk_id == b"LIST" and body[:4] == b"INFO":
+            found["info"] = _parse_info(body[4:], endian)
+        pos += 8 + size + (size & 1)
+    return found
 
 
 def _parse_info(body: bytes, endian: str) -> dict[str, str]:

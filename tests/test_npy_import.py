@@ -70,3 +70,29 @@ def test_format_dispatch(tmp_path):
     with pytest.raises(DataImportError, match="do not apply"):
         load_file(tmp_path / "x.npy", csv_options={"delimiter": ";"})
     assert load_file(tmp_path / "x.npy", csv_options={"delimiter": None}).column_names == ["column_1"]
+
+
+def test_header_that_promises_more_data_than_the_file_holds(tmp_path):
+    np.save(tmp_path / "x.npy", np.zeros(100))
+    raw = (tmp_path / "x.npy").read_bytes()
+    (tmp_path / "cut.npy").write_bytes(raw[: len(raw) - 80])
+    with pytest.raises(DataImportError, match="corrupted or truncated"):
+        load_npy(tmp_path / "cut.npy")
+    with open(tmp_path / "huge.npy", "wb") as fh:  # a valid header that claims ~800 GB of data
+        np.lib.format.write_array_header_1_0(fh, {"descr": "<f8", "fortran_order": False, "shape": (10**11,)})
+        fh.write(np.zeros(10).tobytes())
+    with pytest.raises(DataImportError, match=r"shape \(100000000000,\).*corrupted or truncated"):
+        load_npy(tmp_path / "huge.npy")  # rejected before anything is allocated
+
+
+def test_timedelta_and_datetime_become_seconds(tmp_path):
+    data = np.zeros(3, dtype=[("dt", "m8[ms]"), ("stamp", "M8[s]"), ("v", "f8")])
+    data["dt"] = np.array([0, 10, 20], dtype="m8[ms]")
+    data["stamp"] = np.array(["2026-01-01T00:00:00", "2026-01-01T00:00:02", "2026-01-01T00:00:04"], dtype="M8[s]")
+    np.save(tmp_path / "t.npy", data)
+    ds = load_npy(tmp_path / "t.npy")
+    dt, stamp = ds.find_column("dt"), ds.find_column("stamp")
+    np.testing.assert_allclose(dt.values, [0.0, 0.01, 0.02])
+    assert dt.unit == "s" and dt.kind == "numeric"
+    np.testing.assert_allclose(stamp.values, [0.0, 2.0, 4.0])
+    assert stamp.kind == "datetime" and "2026-01-01" in stamp.note

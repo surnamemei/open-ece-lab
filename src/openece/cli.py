@@ -9,9 +9,9 @@ Exit codes: 0 = completed (PASS, or no requirements given), 1 = completed with F
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -22,7 +22,7 @@ from .errors import ColumnMappingError, ConfigurationError, OpenECEError
 from .io import FORMATS, load_file
 from .io.columns import FREQUENCY_NAMES, MAGNITUDE_NAMES, PHASE_NAMES, TIME_NAMES, ColumnRole, match_by_name
 from .recipes.loader import load_spec
-from .records import RunStore, load_record
+from .records import RUNS_DIR_ENV, RunStore, default_runs_dir, load_record
 from .validation import FAIL, NOT_EVALUATED, parse_requirement
 from .workflows import (
     analyze_bode, analyze_signal, analyze_step, apply_requirements, run_mock_rc_sweep, save_run, spec_parameters,
@@ -53,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
     args.argv = argv
+    if hasattr(args, "runs_dir") and args.runs_dir is None:
+        args.runs_dir = default_runs_dir()
     try:
         return args.handler(args)
     except OpenECEError as exc:
@@ -70,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    runs_help = f"where run folders are created/read (default: ${RUNS_DIR_ENV} or {default_runs_dir()})"
     parser = argparse.ArgumentParser(
         prog=PROG,
         description="OpenECE Lab: hardware-agnostic measurement analysis and validation. "
@@ -94,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     val.add_argument("--require", action="append", default=[], metavar="NAME=MIN:MAX",
                      help="requirement on a result, e.g. cutoff_hz=1450:1750 or overshoot_percent=:10 (repeatable; "
                           "overrides the spec for the same result)")
-    val.add_argument("--runs-dir", type=Path, default=Path("runs"), help="where run folders are created (default: ./runs)")
+    val.add_argument("--runs-dir", type=Path, help=runs_help)
     val.add_argument("--no-record", action="store_true", help="print results only; do not create a run folder")
     val.add_argument("--title", help="title for the report")
 
@@ -143,18 +146,18 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--output", type=Path, help="also write a copy of the HTML report to this path")
     demo.add_argument("--require", action="append", default=[], metavar="NAME=MIN:MAX",
                       help="extra/overriding requirement (repeatable)")
-    demo.add_argument("--runs-dir", type=Path, default=Path("runs"), help="where run folders are created (default: ./runs)")
+    demo.add_argument("--runs-dir", type=Path, help=runs_help)
     demo.add_argument("--no-record", action="store_true", help="print results only; do not create a run folder")
     demo.set_defaults(handler=_cmd_demo_rc)
 
     runs = sub.add_parser("runs", help="list or show stored runs", description="List or show stored run records.")
     runs_sub = runs.add_subparsers(dest="runs_command", required=True, metavar="ACTION")
     runs_list = runs_sub.add_parser("list", help="list runs, oldest first")
-    runs_list.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    runs_list.add_argument("--runs-dir", type=Path, help=runs_help)
     runs_list.set_defaults(handler=_cmd_runs_list)
     runs_show = runs_sub.add_parser("show", help="print a run record as JSON")
     runs_show.add_argument("run", help="run ID (or a unique prefix), run folder, or record.json path")
-    runs_show.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    runs_show.add_argument("--runs-dir", type=Path, help=runs_help)
     runs_show.set_defaults(handler=_cmd_runs_show)
     return parser
 
@@ -200,8 +203,8 @@ def _cmd_signal(args) -> int:
 
 
 def _cmd_demo_rc(args) -> int:
-    if args.output is not None and args.no_record:
-        raise ConfigurationError("--output needs a run record; drop --no-record")
+    if args.output is not None:
+        _check_report_copy_target(args.output, args.runs_dir, args.no_record)
     outcome, recipe_requirements = run_mock_rc_sweep(args.recipe)
     merged = {r.name: r for r in recipe_requirements}
     merged.update({r.name: r for r in map(parse_requirement, args.require)})
@@ -211,11 +214,24 @@ def _cmd_demo_rc(args) -> int:
         report = args.runs_dir / args.saved_run_id / "report.html"
         try:
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(report, args.output)
+            with open(args.output, "xb") as fh:  # never overwrite an existing file
+                fh.write(report.read_bytes())
+        except FileExistsError:
+            raise ConfigurationError(f"--output {args.output} already exists; it was not overwritten") from None
         except OSError as exc:
             raise ConfigurationError(f"cannot write report copy to {args.output}: {exc.strerror or exc}") from exc
         print(f"Report copy : {args.output.resolve()}")
     return code
+
+
+def _check_report_copy_target(output: Path, runs_dir: Path, no_record: bool) -> None:
+    if no_record:
+        raise ConfigurationError("--output needs a run record; drop --no-record")
+    if output.exists():
+        raise ConfigurationError(f"--output {output} already exists; choose a new file name (files are never overwritten)")
+    target, root = output.resolve(), runs_dir.resolve()
+    if target == root or root in target.parents:
+        raise ConfigurationError(f"--output must not point inside the runs folder {runs_dir}")
 
 
 def _cmd_inspect(args) -> int:
@@ -253,6 +269,7 @@ def _cmd_runs_list(args) -> int:
     if not records:
         print(f"no runs in {args.runs_dir}")
     else:
+        print(f"Runs in {args.runs_dir}:")
         rows = [("run id", "created (UTC)", "analysis", "source", "result")]
         for record in records:
             rows.append((record.run_id, record.created_utc[:19].replace("T", " "), str(record.analysis.get("type")),
@@ -266,7 +283,8 @@ def _cmd_runs_list(args) -> int:
 def _cmd_runs_show(args) -> int:
     path = Path(args.run)
     record = load_record(path) if path.exists() else RunStore(args.runs_dir).load(args.run)
-    print(record.to_json(), end="")
+    # ASCII-only JSON is valid whatever the console encoding (e.g. cp1252 when redirected on Windows).
+    print(json.dumps(record.to_dict(), indent=2, ensure_ascii=True))
     return EXIT_OK
 
 
@@ -390,11 +408,11 @@ def _limits(minimum, maximum) -> str:
 
 
 def _configure_output() -> None:
-    """Avoid UnicodeEncodeError on legacy Windows consoles when names contain e.g. 'µ' or '°'."""
+    """Never crash on output: legacy Windows consoles cannot encode e.g. 'µ', and file names with
+    undecodable bytes (lone surrogates) cannot be encoded even as UTF-8."""
     for stream in (sys.stdout, sys.stderr):
-        encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
         reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is not None and encoding != "utf8":
+        if reconfigure is not None:
             try:
                 reconfigure(errors="backslashreplace")
             except (ValueError, OSError):
@@ -402,7 +420,8 @@ def _configure_output() -> None:
 
 
 def demo_rc(recipe_path: str, output: str):
-    """Gate 0 entry point, kept for compatibility: run the mock RC demo and copy the report to ``output``."""
+    """Gate 0 entry point, kept for compatibility: run the mock RC demo and copy the report to
+    ``output`` (which must not exist yet)."""
     return main(["demo-rc", "--recipe", str(recipe_path), "--output", str(output)])
 
 

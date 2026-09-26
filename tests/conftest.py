@@ -6,6 +6,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def isolated_runs_dir(tmp_path_factory, monkeypatch):
+    """Default run location for every test: never the user's real data directory."""
+    runs = tmp_path_factory.mktemp("default-runs")
+    monkeypatch.setenv("OPENECE_RUNS_DIR", str(runs))
+    return runs
+
+
 @pytest.fixture
 def write_text(tmp_path):
     """Write text with exactly the given characters (no newline translation)."""

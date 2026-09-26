@@ -35,17 +35,22 @@ Requires Python 3.11 or newer on Windows or Linux (macOS should work but is not 
 ```bash
 git clone <your repository URL> open-ece-lab
 cd open-ece-lab
-python -m venv .venv
 ```
 
-Activate the environment. On Linux or macOS:
+Create and activate a virtual environment. On Linux or macOS (on Debian/Ubuntu, install the
+`python3-venv` package first if `venv` is missing):
+
+```bash
+python3 -m venv .venv
+```
 
 ```bash
 source .venv/bin/activate
 ```
 
-On Windows (PowerShell): `.venv\Scripts\Activate.ps1`. Then install the package with its
-development extras:
+On Windows (PowerShell), run `py -m venv .venv`, then `.venv\Scripts\Activate.ps1`. Then
+install the package with its development extras (inside the activated environment, `python` and
+`pip` refer to the environment on every platform):
 
 ```bash
 pip install -e ".[dev]"
@@ -84,12 +89,21 @@ Validation (RC low-pass acceptance)
 Overall: PASS
 
 Run    : 20260926T075857Z-bode-6e9103a4
-Record : runs/20260926T075857Z-bode-6e9103a4/record.json
-Report : runs/20260926T075857Z-bode-6e9103a4/report.html
+Record : /home/you/.local/share/openece/runs/20260926T075857Z-bode-6e9103a4/record.json
+Report : /home/you/.local/share/openece/runs/20260926T075857Z-bode-6e9103a4/report.html
 ```
 
 Open `report.html` in a browser for the plots and full provenance, or read `record.json` for the
-machine-readable record. Each run gets a new folder under `runs/`.
+machine-readable record. Each run gets a new folder. Records are kept **outside the repository**
+in your per-user data directory:
+
+| Platform | Default runs folder |
+| --- | --- |
+| Linux | `$XDG_DATA_HOME/openece/runs` (usually `~/.local/share/openece/runs`) |
+| Windows | `%LOCALAPPDATA%\OpenECE\runs` |
+| macOS | `~/Library/Application Support/OpenECE/runs` |
+
+Set the `OPENECE_RUNS_DIR` environment variable, or pass `--runs-dir DIR`, to use another folder.
 
 ## Example commands
 
@@ -146,7 +160,8 @@ open-ece runs list
 open-ece runs show 20260926T075857Z
 ```
 
-Run the Gate 0 mock-instrument demo. Its report and record are clearly labelled SIMULATED:
+Run the Gate 0 mock-instrument demo. Its report and record are clearly labelled SIMULATED.
+`--output PATH` also writes a copy of the report, but it refuses to overwrite an existing file:
 
 ```bash
 open-ece demo-rc --recipe examples/recipes/rc_lowpass.yaml
@@ -161,28 +176,38 @@ command name) is kept as an alias.
 ## How input files are read
 
 - **CSV/TSV/TXT:** `#` comment lines are kept as provenance; the delimiter (`,` `;` tab or
-  whitespace) is detected; the first row is the header unless it is all numeric. A row of units
+  whitespace) is detected, with a consistent tab or semicolon split winning over commas, which
+  are then decimal commas. The first row is the header unless it is all numeric. A row of units
   under the header (PicoScope style) is recognised. A column is numeric only if every non-blank
   cell parses; otherwise it is reported with the first bad line and never silently converted.
   ISO 8601 date-times are converted to seconds since the first sample. Decimal commas need
-  `--decimal ,`; metadata preambles need `--skip-rows N` or `#` prefixes.
+  `--decimal ,`; metadata preambles need `--skip-rows N` or `#` prefixes. UTF-8 (with or without
+  BOM), UTF-16/32 with BOM, and Latin-1 (with a warning) are read.
 - **WAV:** the sample rate, channel layout, encoding, bit depth and any RIFF `INFO` comment are
   recorded. Samples are scaled to **FS** (fraction of digital full scale); WAV carries no
   physical units, so nothing is labelled as volts. Multichannel files are never mixed down; you
-  choose a channel.
-- **NPY:** 1-D, 2-D (samples x columns) or structured arrays; pickled/object arrays are refused.
+  choose a channel. A truncated recording is loaded with a warning.
+- **NPY:** 1-D, 2-D (samples x columns) or structured arrays. `timedelta64` becomes seconds and
+  `datetime64` becomes seconds since the first value. Pickled/object arrays and files whose
+  header does not match their size are refused.
 - **Column roles** are filled by an explicit option first, then by a recognised name, then (for
   the main data column only) by being the single remaining numeric column. Anything else is an
-  error that lists the candidates and the option to use.
-- **Units** come from headers: `name (unit)`, `name [unit]` or suffixes such as `_s`, `_ms`,
-  `_hz`, `_db`, `_deg`. Time defaults to seconds and frequency to Hz, each with a visible
-  warning. Magnitude (dB or linear) and phase (deg or rad) are **never assumed**. Use
+  error that lists the candidates and the option to use. Single-letter names (`t`, `f`) match
+  only in lower case, because `T` is usually a temperature. An unusable phase column is reported
+  as a warning and the Bode analysis continues without phase.
+- **Units** come from headers: `name [unit]`, `name (unit)` or suffixes such as `_s`, `_ms`,
+  `_hz`, `_MHz`, `_db`, `_deg`. Parenthesised text counts as a unit only if it is a recognised
+  unit or a compound of recognised units (`V`, `mV`, `Hz`, `dB`, `deg`, `rpm`, `degC`,
+  `m/s^2`, ...). Anything else, such as `Voltage (CH1)`, is an annotation, and the unit is then
+  reported as "not specified". Time defaults to seconds and frequency to Hz, each with a visible
+  warning, but never when the header carries an unrecognised annotation such as
+  `Time (samples)`. Magnitude (dB or linear) and phase (deg or rad) are **never assumed**. Use
   `--magnitude-unit` or `--phase-unit` when a header has no unit.
 
 ## Run records
 
-Each run folder contains `record.json`, `report.html`, figures (`*.png`) and data tables
-(`*.csv`). Folders are created exclusively, and files are never replaced, so earlier runs can't
+Each run folder (in the default location above unless `--runs-dir`/`OPENECE_RUNS_DIR` says
+otherwise) contains `record.json`, `report.html`, figures (`*.png`) and data tables (`*.csv`). Folders are created exclusively, and files are never replaced, so earlier runs can't
 be overwritten. The record, schema `openece.run-record` version 1, contains:
 
 | Key | Content |
@@ -222,14 +247,14 @@ The CLI is a thin layer over the same functions:
 
 ```python
 from openece.io import load_file
-from openece.records import RunStore
+from openece.records import RunStore, default_runs_dir
 from openece.validation import Requirement
 from openece.workflows import analyze_bode, apply_requirements, save_run
 
 data = load_file("examples/rc_sweep.csv")          # Dataset: columns, units, provenance
 outcome = analyze_bode(data)                         # typed results with units, no files written
 outcome = apply_requirements(outcome, [Requirement("cutoff_hz", 1450, 1750)])
-saved = save_run(outcome, RunStore("runs"))          # record.json + report.html + figures
+saved = save_run(outcome, RunStore(default_runs_dir()))  # record.json + report.html + figures
 print(outcome.results["cutoff_hz"].value, outcome.overall, saved.report_path)
 ```
 
@@ -270,12 +295,15 @@ them for contributors and coding agents.
   noise in the passband biases the cutoff slightly. High-pass/band-pass lower edges are not
   estimated. Magnitude/phase input only (no complex or Vin/Vout amplitude pairs).
 - **Step:** positive-going steps only. Times are reported on the file's time axis unless
-  `--step-time` is given.
+  `--step-time` is given. A response that is still outside the settling band at the end of the
+  record has no settling time (`null`, and its requirement FAILs).
 - **Signal:** the dominant frequency is quantised to the FFT bin spacing (reported as
   `frequency_resolution_hz`); no THD/SNR yet. Input must be uniformly sampled (no resampling).
 - **Import:** no Excel, HDF5, NPZ or vendor-specific binary formats. Quoted CSV fields may not
   span lines. Time-of-day-only timestamps (`10:15:02`) are not parsed. WAV amplitudes are not
-  calibrated to volts.
+  calibrated to volts. Units are recognised from a built-in list, so an unusual unit is shown as
+  "not specified" rather than guessed. A headerless file of integer pairs such as `2,3090` can't
+  be told apart from decimal-comma data, so it is imported as two columns with a warning.
 - **UI:** command line and HTML reports only; no desktop/web UI.
 - Records store the input's path and SHA-256 but do not copy the input file into the run folder.
 

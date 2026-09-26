@@ -134,3 +134,18 @@ def test_mock_instruments_declare_that_they_are_simulated():
         info = instrument.describe()
         assert info.backend == "mock" and info.simulated is True
     assert plant.seed == 5305
+
+
+def test_step_metrics_reports_nan_when_the_response_never_settles():
+    t = np.linspace(-0.1, 1, 1101)  # 0.1 s of pre-step baseline, then a first-order step at t = 0
+    y = np.where(t >= 0, 1 - np.exp(-np.clip(t, 0, None) / 0.05), 0.0)
+    y[-1] += 0.1  # the final sample is outside the band: the record ends before settling
+    assert math.isnan(step_metrics(t, y, settling_band=0.02)["settling_time_s"])
+    y[-1] -= 0.1
+    assert step_metrics(t, y, settling_band=0.02)["settling_time_s"] == pytest.approx(0.05 * math.log(50), abs=2e-3)
+
+
+def test_unwrap_phase_deg_starts_in_the_principal_range():
+    np.testing.assert_allclose(unwrap_phase_deg([356.4, 350.0, 315.0, 271.0]), [-3.6, -10.0, -45.0, -89.0])
+    np.testing.assert_allclose(unwrap_phase_deg([-190.0, -200.0]), [170.0, 160.0])
+    np.testing.assert_allclose(unwrap_phase_deg([180.0, 179.0]), [180.0, 179.0])

@@ -161,10 +161,24 @@ def test_mock_demo_keeps_gate0_result_and_labels_it_simulated(tmp_path, capsys):
     assert "SIMULATED DATA" in copy.read_text(encoding="utf-8")
 
 
-def test_legacy_demo_rc_function_still_works(tmp_path, monkeypatch, capsys):
+def test_legacy_demo_rc_function_still_works(tmp_path, monkeypatch, capsys, isolated_runs_dir):
     monkeypatch.chdir(tmp_path)
     assert demo_rc(str(EXAMPLES / "recipes" / "rc_lowpass.yaml"), "rc_report.html") == 0
-    assert (tmp_path / "rc_report.html").is_file() and (tmp_path / "runs").is_dir()
+    assert (tmp_path / "rc_report.html").is_file()
+    only_run(isolated_runs_dir)
+
+
+def test_default_runs_location_is_not_the_working_directory(tmp_path, monkeypatch, capsys, isolated_runs_dir):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    monkeypatch.chdir(checkout)
+    for _ in range(2):
+        code, out, _ = run_cli(capsys, "analyze-bode", EXAMPLES / "rc_sweep.csv")
+        assert code == 0 and str(isolated_runs_dir) in out
+    assert list(checkout.iterdir()) == []  # nothing written where the command was run
+    assert len([p for p in isolated_runs_dir.iterdir() if p.is_dir()]) == 2  # two runs, none overwritten
+    code, out, _ = run_cli(capsys, "runs", "list")
+    assert code == 0 and f"Runs in {isolated_runs_dir}" in out
 
 
 def test_python_dash_m_entry_point():
@@ -182,3 +196,47 @@ def test_installed_console_script(tmp_path):
                             capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert "Overall: PASS" in result.stdout
+
+
+def test_demo_output_never_overwrites_anything(tmp_path, capsys):
+    recipe = EXAMPLES / "recipes" / "rc_lowpass.yaml"
+    existing = tmp_path / "notes.txt"
+    existing.write_text("precious", encoding="utf-8")
+    code, _, err = run_cli(capsys, "demo-rc", "--recipe", recipe, "--output", existing, "--runs-dir", tmp_path / "runs")
+    assert code == 2 and "already exists" in err
+    assert existing.read_text(encoding="utf-8") == "precious"
+    assert not (tmp_path / "runs").exists()  # refused before anything ran
+    code, _, _ = run_cli(capsys, "demo-rc", "--recipe", recipe, "--runs-dir", tmp_path / "runs")
+    run_dir, _ = only_run(tmp_path / "runs")
+    code, _, err = run_cli(capsys, "demo-rc", "--recipe", recipe, "--output", run_dir / "extra.html",
+                           "--runs-dir", tmp_path / "runs")
+    assert code == 2 and "inside the runs folder" in err
+
+
+def test_runs_show_prints_ascii_json(tmp_path, capsys, write_text):
+    rows = "".join(f"{i * 10},{i}\n" for i in range(40))
+    path = write_text("micro.csv", "time (µs),v (V)\n" + rows)
+    run_cli(capsys, "analyze-signal", path, "--runs-dir", tmp_path)
+    run_id = next(p.name for p in tmp_path.iterdir())
+    code, out, _ = run_cli(capsys, "runs", "show", run_id, "--runs-dir", tmp_path)
+    assert code == 0 and out.isascii()  # valid JSON whatever the console encoding
+    assert json.loads(out)["analysis"]["parameters"]["time"]["unit_used"] == "µs"
+
+
+def test_dollar_signs_in_titles_are_plain_text(tmp_path, capsys):
+    code, _, err = run_cli(capsys, "analyze-bode", EXAMPLES / "rc_sweep.csv", "--title", r"Cost $5 \alpha$x$",
+                           "--runs-dir", tmp_path)
+    assert code == 0, err
+    _, record = only_run(tmp_path)
+    assert record["analysis"]["title"] == r"Cost $5 \alpha$x$"
+
+
+def test_runs_list_survives_a_damaged_record(tmp_path, capsys):
+    run_cli(capsys, "analyze-bode", EXAMPLES / "rc_sweep.csv", "--runs-dir", tmp_path)
+    run_cli(capsys, "analyze-bode", EXAMPLES / "rc_sweep.csv", "--runs-dir", tmp_path)
+    damaged, intact = sorted(tmp_path.iterdir())
+    (damaged / "record.json").write_text('{"schema": "openece.run-record", "schema_version": 1, "analysis": "bode"}',
+                                         encoding="utf-8")
+    code, out, err = run_cli(capsys, "runs", "list", "--runs-dir", tmp_path)
+    assert code == 0 and intact.name in out and damaged.name not in out
+    assert f"warning: {damaged.name}" in err

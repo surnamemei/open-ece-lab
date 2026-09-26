@@ -117,3 +117,15 @@ def test_riff_info_comment_is_exposed():
     ds = load_wav(EXAMPLES / "signal.wav")
     assert ds.metadata["comments"] and "SYNTHETIC" in ds.metadata["comments"][0]
     assert ds.metadata["info"]["ISFT"].startswith("OpenECE Lab")
+
+
+def test_data_chunk_longer_than_the_file_warns(tmp_path):
+    buffer = io.BytesIO()
+    wavfile.write(buffer, 8000, np.zeros(4000, dtype=np.int16))
+    raw = bytearray(buffer.getvalue())
+    at = raw.find(b"data")
+    raw[at + 4:at + 8] = (9000).to_bytes(4, "little")  # claims 4500 frames; the RIFF size stays consistent
+    (tmp_path / "t.wav").write_bytes(bytes(raw))
+    ds = load_wav(tmp_path / "t.wav")
+    assert ds.n_rows == 4000
+    assert any("declares 4500 frames" in w and "truncated" in w for w in ds.warnings)

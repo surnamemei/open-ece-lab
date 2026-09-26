@@ -158,3 +158,52 @@ def test_missing_file(tmp_path):
 def test_invalid_options_are_user_errors(write_text, options):
     with pytest.raises(OpenECEError):
         load_csv(write_text("ok.csv", "a,b\n1,2\n"), **options)
+
+
+def test_row_vector_file_does_not_crash_the_delimiter_detection(write_text):
+    ds = load_csv(write_text("row.csv", ",".join(f"{i * 1e-3:.6f}" for i in range(20_000)) + "\n"))
+    assert len(ds.columns) == 20_000 and ds.n_rows == 1
+
+
+def test_oversized_field_error_names_its_line(write_text):
+    text = "time,voltage\n0,1\n1,2\n2,3\n3," + "9" * 200_000 + "\n4,5\n"
+    with pytest.raises(DataImportError, match=r"line 5: .*field limit") as err:
+        load_csv(write_text("huge.csv", text))
+    assert err.value.hint == "delimiter"
+
+
+def test_utf32_and_truncated_utf16(tmp_path):
+    utf32 = tmp_path / "u32.csv"
+    utf32.write_bytes("time,v\n0,1\n1,2\n".encode("utf-32"))
+    ds = load_csv(utf32)
+    assert ds.column_names == ["time", "v"] and ds.metadata["encoding"] == "utf-32"
+    broken = tmp_path / "u16.csv"
+    broken.write_bytes("time,v\n0,1\n".encode("utf-16") + b"\x31")  # odd number of bytes
+    with pytest.raises(DataImportError, match="UTF-16") as err:
+        load_csv(broken)
+    assert err.value.hint == "encoding"
+
+
+def test_semicolon_split_wins_over_decimal_commas(write_text):
+    path = write_text("eu.csv", "0,000;2,000\n0,001;2,309\n0,002;2,500\n")
+    with pytest.raises(DataImportError, match="decimal comma"):
+        load_csv(path)  # never mis-split on the decimal commas
+    ds = load_csv(path, decimal=",")
+    assert ds.metadata["delimiter"] == "semicolon" and ds.metadata["header_line"] is None
+    np.testing.assert_allclose(ds.columns[1].values, [2.0, 2.309, 2.5])
+
+
+def test_headerless_integer_pairs_warn_about_a_possible_decimal_comma(write_text):
+    ds = load_csv(write_text("ints.csv", "2,0000\n2,3090\n2,5100\n"))
+    assert any("decimal comma" in w for w in ds.warnings)
+    assert not load_csv(write_text("floats.csv", "0.5,1.5\n1.5,2.5\n")).warnings
+
+
+def test_bom_is_removed_with_an_explicit_encoding(write_text):
+    ds = load_csv(write_text("bom.csv", "﻿0.5,1.5\n1.5,2.5\n"), encoding="utf-8")
+    assert ds.metadata["header_line"] is None and ds.n_rows == 2
+
+
+def test_quote_character_is_not_a_valid_delimiter(write_text):
+    with pytest.raises(DataImportError, match="invalid delimiter"):
+        load_csv(write_text("q.csv", "a,b\n1,2\n"), delimiter='"')

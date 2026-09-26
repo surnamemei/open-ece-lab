@@ -39,9 +39,16 @@ def magnitude_to_db(magnitude):
 
 
 def unwrap_phase_deg(phase_deg):
-    """Remove 360-degree jumps from a phase curve ordered by frequency."""
-    p = np.asarray(phase_deg, dtype=float)
-    return np.rad2deg(np.unwrap(np.deg2rad(p)))
+    """Remove 360-degree jumps from a phase curve ordered by frequency.
+
+    The curve is then shifted by a whole number of turns so that its first point lies in
+    (-180, 180], making the result independent of the instrument's phase convention
+    (e.g. 0..360 degrees).
+    """
+    p = np.rad2deg(np.unwrap(np.deg2rad(np.asarray(phase_deg, dtype=float))))
+    if p.size:
+        p = p - 360.0 * np.ceil((p[0] - 180.0) / 360.0)
+    return p
 
 
 def interpolate_at_frequency(frequency_hz, values, target_hz: float) -> float:

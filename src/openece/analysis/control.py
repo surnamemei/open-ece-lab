@@ -29,7 +29,12 @@ def step_metrics(t, y, reference: float | None = None, settling_band: float = 0.
     overshoot = max(0.0, (peak - final) / abs(span) * 100.0)
     tol = settling_band * abs(span)
     outside = np.flatnonzero(np.abs(y - final) > tol)
-    settling_time = float(t[outside[-1] + 1]) if len(outside) and outside[-1] + 1 < len(t) else float(t[0])
+    if not len(outside):
+        settling_time = float(t[0])
+    elif outside[-1] + 1 < len(t):
+        settling_time = float(t[outside[-1] + 1])
+    else:
+        settling_time = float("nan")  # still outside the band at the end of the record: never settled
     result = {
         "initial": initial,
         "final": final,

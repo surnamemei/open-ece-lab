@@ -1,9 +1,11 @@
 """Unit annotations in column headers and conversions to the units the analyses use.
 
-Headers may carry a unit as ``name (unit)``, ``name [unit]`` or, for a short whitelist of
+Headers may carry a unit as ``name [unit]``, ``name (unit)`` or, for a short whitelist of
 unambiguous units, as a ``name_unit`` suffix (``time_s``, ``frequency_hz``, ``gain_db``).
-Parenthesised text glued to the name is only treated as a unit when it is a known unit, so
-LTspice-style names such as ``V(out)`` or ``I(R1)`` stay intact.
+Parenthesised text is a unit only when it is a recognised unit (``m/s^2`` style compounds of
+recognised units included). Other parenthesised text after a space, such as ``Voltage (CH1)``,
+is kept as an *annotation* and never reported as a unit; glued text such as LTspice's
+``V(out)`` or ``I(R1)`` stays part of the name.
 
 Analyses work in seconds, hertz, decibels and degrees. The helpers below convert explicitly and
 raise :class:`UnitError` instead of guessing when a unit is unknown or ambiguous.
@@ -23,6 +25,7 @@ class UnitError(ValueError):
 class HeaderUnit:
     base: str
     unit: str | None
+    annotation: str | None = None  # parenthesised text that is not a recognised unit, e.g. "CH1"
 
 
 _TIME_SCALE = {
@@ -44,7 +47,14 @@ _PHASE_SCALE = {
 }
 _LINEAR_RATIO_UNITS = {"v/v", "a/a", "linear", "lin", "ratio", "abs", "1"}
 _AMPLITUDE_UNITS = {"v", "mv", "uv", "µv", "μv", "vpp", "vpk", "vrms", "a", "ma", "ua", "µa"}
-_OTHER_UNITS = {"%", "rpm", "w", "mw", "ohm", "ω", "Ω", "°c", "degc", "k", "pa", "n", "nm", "m", "mm", "fs"}
+_OTHER_UNITS = {
+    "%", "ppm", "rpm", "rps", "w", "mw", "kw", "va", "j", "wh", "kwh", "ah", "mah",
+    "kv", "vac", "vdc", "na", "ohm", "kohm", "mohm", "\u03c9", "\u2126", "k\u03c9", "m\u03c9",
+    "f", "uf", "\u00b5f", "nf", "pf", "h", "mh", "uh", "\u00b5h",
+    "\u00b0c", "degc", "\u00b0f", "degf", "k", "pa", "kpa", "mpa", "bar", "mbar", "psi",
+    "n", "kn", "nm", "m", "mm", "cm", "km", "um", "\u00b5m", "kg", "g", "mg", "l", "ml",
+    "lx", "lux", "fs", "lsb", "counts", "a.u.",
+}
 
 # Units recognised in "Name(unit)" (no space) headers.
 _KNOWN_UNITS = (
@@ -65,6 +75,7 @@ _SUFFIX_UNITS = {
     "v": "V", "mv": "mV", "uv": "uV", "rpm": "rpm", "pct": "%", "percent": "%",
 }
 
+_EXPONENT = re.compile(r"(\^?-?\d+|[\u00b2\u00b3])$")
 _TRAILING_BRACKET = re.compile(
     r"^(?P<base>.*?)(?P<gap>\s*)(?:\((?P<paren>[^()]*)\)|\[(?P<square>[^\[\]]*)\])\s*$"
 )
@@ -72,7 +83,7 @@ _UNIT_SUFFIX = re.compile(r"^(?P<base>.+?)_(?P<unit>[A-Za-z%]+)$")
 
 
 def parse_header(header: str) -> HeaderUnit:
-    """Split a column header into a base name and an optional unit."""
+    """Split a column header into a base name, an optional unit and an optional annotation."""
     text = header.strip()
     match = _TRAILING_BRACKET.match(text)
     if match and match.group("base").strip():
@@ -82,13 +93,29 @@ def parse_header(header: str) -> HeaderUnit:
             if unit:
                 return HeaderUnit(base, unit)
         else:
-            unit = match.group("paren").strip()
-            if unit and (match.group("gap") or unit.lower() in _KNOWN_UNITS):
-                return HeaderUnit(base, unit)
+            inner = match.group("paren").strip()
+            if inner and is_known_unit(inner):
+                return HeaderUnit(base, inner)
+            if inner and match.group("gap"):
+                return HeaderUnit(base, None, inner)
     match = _UNIT_SUFFIX.match(text)
-    if match and match.group("unit").lower() in _SUFFIX_UNITS:
-        return HeaderUnit(match.group("base"), _SUFFIX_UNITS[match.group("unit").lower()])
+    if match:
+        written = match.group("unit")
+        if written in _FREQUENCY_SCALE_EXACT:  # keep the case: MHz and mHz differ by 1e9
+            return HeaderUnit(match.group("base"), written)
+        if written.lower() in _SUFFIX_UNITS:
+            return HeaderUnit(match.group("base"), _SUFFIX_UNITS[written.lower()])
     return HeaderUnit(text, None)
+
+
+def is_known_unit(text: str) -> bool:
+    """True for recognised units and products/quotients of them (``m/s^2``, ``N*m``, ``1/s``)."""
+    return all(_known_atom(atom.strip()) for atom in re.split(r"[/*\u00b7]", text.strip().lower()))
+
+
+def _known_atom(atom: str) -> bool:
+    stripped = _EXPONENT.sub("", atom)  # "s^2" -> "s", "m\u00b2" -> "m"
+    return atom in _KNOWN_UNITS or (bool(stripped) and stripped in _KNOWN_UNITS)
 
 
 def normalize_name(name: str) -> str:

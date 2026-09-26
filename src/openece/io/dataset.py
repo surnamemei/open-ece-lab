@@ -46,6 +46,21 @@ class SourceInfo:
             raise DataImportError(f"cannot read {p}: {exc.strerror or exc}") from exc
         return cls(str(path), str(p.resolve()), fmt, size, digest.hexdigest())
 
+    @classmethod
+    def read(cls, path: str | Path, fmt: str) -> tuple[SourceInfo, bytes]:
+        """Read a file once: its provenance plus the bytes to parse, so the checksum always
+        describes exactly the data that was analysed."""
+        p = Path(path)
+        if not p.exists():
+            raise DataImportError(f"input file not found: {p}")
+        if not p.is_file():
+            raise DataImportError(f"not a regular file: {p}")
+        try:
+            data = p.read_bytes()
+        except OSError as exc:
+            raise DataImportError(f"cannot read {p}: {exc.strerror or exc}") from exc
+        return cls.from_path(p, fmt, data), data
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "kind": "file",
@@ -157,5 +172,9 @@ class Dataset:
                 )
 
 
-def _quoted(names) -> str:
-    return ", ".join(repr(n) for n in names) if names else "(none)"
+def _quoted(names, limit: int = 10) -> str:
+    names = list(names)
+    if not names:
+        return "(none)"
+    shown = ", ".join(repr(n) for n in names[:limit])
+    return shown if len(names) <= limit else f"{shown} and {len(names) - limit} more"

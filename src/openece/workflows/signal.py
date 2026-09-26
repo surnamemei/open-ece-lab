@@ -1,6 +1,7 @@
 """Signal analysis (level statistics, dominant frequency, spectrum, PSD) of a sampled waveform."""
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 import numpy as np
@@ -91,13 +92,15 @@ def analyze_signal(
         raise AnalysisError(f"nperseg ({nperseg}) cannot exceed the number of samples ({n})", hint="nperseg")
 
     stats = waveform_statistics(x)
-    f0 = dominant_frequency(x, fs)
+    no_ac = stats["ac_rms"] <= 1e-12 * stats["peak_abs"]  # constant up to floating-point residue
+    f0 = math.nan if no_ac else dominant_frequency(x, fs)
     freq, amplitude = fft_spectrum(x, fs)
     psd_freq, psd = welch_psd(x, fs, nperseg=nperseg)
     unit = mapping["signal"].column.unit
     results = {
         "dominant_frequency_hz": Measurement(
-            f0, "Hz", "frequency of the largest spectral peak (Hann-windowed FFT, DC excluded)"),
+            f0, "Hz", "frequency of the largest spectral peak (Hann-windowed FFT, DC excluded)",
+            note="not available: the signal is constant (no AC content)" if no_ac else None),
         "frequency_resolution_hz": Measurement(
             fs / n, "Hz", "FFT bin spacing (the dominant frequency is quantised to this)"),
         **{name: Measurement(stats[name], unit, text) for name, text in _STATISTICS.items()},
