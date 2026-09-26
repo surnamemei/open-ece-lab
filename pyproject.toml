@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-ece-lab"
+version = "0.1.0"
+description = "Hardware-agnostic measurement, analysis and validation toolkit for ECE experiments."
+requires-python = ">=3.11"
+dependencies = ["numpy>=2.0", "scipy>=1.13", "matplotlib>=3.8", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+openece = "openece.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

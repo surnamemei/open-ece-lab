@@ -1,0 +1,15 @@
+name: RC Low-Pass Validation
+mock_plant:
+  r_ohm: 10000
+  c_f: 1.0e-8
+  noise_std: 0.001
+stimulus:
+  type: sine_sweep
+  start_hz: 100
+  stop_hz: 100000
+  points: 80
+  amplitude_vpk: 1.0
+requirements:
+  cutoff_hz:
+    min: 1450
+    max: 1750
