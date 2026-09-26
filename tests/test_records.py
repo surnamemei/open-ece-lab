@@ -1,5 +1,6 @@
 import json
 import math
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -111,8 +112,9 @@ def test_load_by_prefix_and_errors(tmp_path):
     b = save_run(make_outcome(), store)
     assert store.load(a.record.run_id[:-2]).run_id == a.record.run_id
     assert load_record(b.directory).run_id == b.record.run_id
+    shared = os.path.commonprefix([a.record.run_id, b.record.run_id])  # at least the year
     with pytest.raises(RecordError, match="ambiguous"):
-        store.load(a.record.run_id[:10])
+        store.load(shared)
     with pytest.raises(RecordError, match="no run"):
         store.load("does-not-exist")
 

@@ -138,7 +138,7 @@ def test_runs_list_and_show(tmp_path, capsys):
     run_cli(capsys, "analyze-bode", EXAMPLES / "rc_sweep.csv", "--runs-dir", tmp_path)
     code, out, _ = run_cli(capsys, "runs", "list", "--runs-dir", tmp_path)
     assert code == 0 and "bode" in out and "NOT_EVALUATED" in out
-    run_id = next(p.name for p in tmp_path.iterdir())
+    run_id = only_run(tmp_path)[0].name
     code, out, _ = run_cli(capsys, "runs", "show", run_id[:22], "--runs-dir", tmp_path)
     assert code == 0 and json.loads(out)["run_id"] == run_id
     code, _, err = run_cli(capsys, "runs", "show", "nope", "--runs-dir", tmp_path)
@@ -216,9 +216,10 @@ def test_demo_output_never_overwrites_anything(tmp_path, capsys):
 def test_runs_show_prints_ascii_json(tmp_path, capsys, write_text):
     rows = "".join(f"{i * 10},{i}\n" for i in range(40))
     path = write_text("micro.csv", "time (µs),v (V)\n" + rows)
-    run_cli(capsys, "analyze-signal", path, "--runs-dir", tmp_path)
-    run_id = next(p.name for p in tmp_path.iterdir())
-    code, out, _ = run_cli(capsys, "runs", "show", run_id, "--runs-dir", tmp_path)
+    runs = tmp_path / "runs"  # separate from the input file written into tmp_path
+    run_cli(capsys, "analyze-signal", path, "--runs-dir", runs)
+    run_dir, _ = only_run(runs)
+    code, out, _ = run_cli(capsys, "runs", "show", run_dir.name, "--runs-dir", runs)
     assert code == 0 and out.isascii()  # valid JSON whatever the console encoding
     assert json.loads(out)["analysis"]["parameters"]["time"]["unit_used"] == "µs"
 
