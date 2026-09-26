@@ -5,6 +5,7 @@
 | Status | **v0.1 RELEASE CANDIDATE.** Not a final public release (see "Public-release readiness"). |
 | Date | 26 September 2026 |
 | Verified commit | `fe3caa7` on branch `release/v0.1-rc` (package version `0.1.0`) |
+| CI | GitHub Actions [run 36230630303](https://github.com/surnamemei/open-ece-lab/actions/runs/36230630303) on `fe3caa7`: 4/4 jobs passed (Ubuntu and Windows, Python 3.11 and 3.13) |
 | Hardware | none required: all verification used files and mock instruments |
 
 ## Verification result
@@ -111,10 +112,12 @@ reporting or the CLI. A future UI would call `openece.workflows`, exactly as the
 | Linux: Ubuntu 24.04.4 LTS on WSL2 (kernel 6.6.87.2), x86_64 | 3.12.3 (system) | 2.5.3 / 1.18.1 / 3.11.2 | 277 passed; all CLI checks |
 | same machine | 3.11.16 (standalone build) | 2.4.6 / 1.17.1 / 3.11.2 | 277 passed |
 | same machine | 3.13.15 (standalone build) | 2.5.3 / 1.18.1 / 3.11.2 | 277 passed |
-| Windows | 3.11, 3.13 | CI (`windows-latest`) | **not verified in this session**: the CI matrix runs on push; check the GitHub Actions result |
+| Windows (`windows-latest`, GitHub Actions) | 3.11, 3.13 | resolved by pip in CI | install, full test suite and README quick start passed (run 36230630303) |
+| Ubuntu (`ubuntu-latest`, GitHub Actions) | 3.11, 3.13 | resolved by pip in CI | install, full test suite and README quick start passed (run 36230630303) |
 | macOS | none | none | not tested |
 
-Windows-specific hardening is in place but could only be simulated on Linux:
+The Windows CI jobs confirm the test suite and the quick start. These Windows-specific edge cases
+were exercised only by simulation on Linux:
 
 - console output that can't be encoded is escaped rather than crashing;
 - `runs show` prints ASCII-only JSON;
@@ -169,16 +172,15 @@ Windows-specific hardening is in place but could only be simulated on Linux:
 ## Public-release readiness
 
 **Not ready for a final public release. Ready as a release candidate for internal and friendly-user
-testing.** Remaining before a public release:
+testing.** CI is green on Windows and Ubuntu. Remaining before a public release:
 
-1. A green GitHub Actions run on Windows and Ubuntu (Python 3.11 and 3.13) for this branch.
-2. Validation with real instrument export files (at least one oscilloscope CSV, one network
+1. Validation with real instrument export files (at least one oscilloscope CSV, one network
    analyser export, one sound-card WAV) and with a few external users.
-3. Packaging: add `license = "MIT"` to `pyproject.toml`, and decide how examples ship (package
+2. Packaging: add `license = "MIT"` to `pyproject.toml`, and decide how examples ship (package
    data or a download). Then test installation from a built wheel outside the repository and
    decide on PyPI publication.
-4. Replace the README's `<your repository URL>` placeholder once the repository is public.
-5. Keep the record schema (`openece.run-record` v1) stable, or bump it deliberately, before
+3. Replace the README's `<your repository URL>` placeholder once the repository is public.
+4. Keep the record schema (`openece.run-record` v1) stable, or bump it deliberately, before
    external users rely on it.
 
 ## Hardware-integration readiness
@@ -297,4 +299,10 @@ open-ece frobnicate                                      # exit 2: invalid choic
 open-ece analyze-bode                                    # exit 2: file required
 open-ece analyze-bode examples/rc_sweep.csv --no-such-option   # exit 2: unrecognized arguments
 python -m openece --version                              # open-ece 0.1.0
+
+# CI: GitHub Actions run 36230630303 on fe3caa7, one job per (ubuntu-latest, windows-latest) x (3.11, 3.13)
+pip install -e ".[dev]"
+pytest -q
+open-ece analyze-bode examples/rc_sweep.csv --spec examples/specs/rc_lowpass.yaml --runs-dir ci-runs
+# all 4 jobs: every step succeeded (read from the public GitHub Actions API)
 ```
