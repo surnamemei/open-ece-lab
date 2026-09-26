@@ -326,7 +326,9 @@ with Python 3.11 and 3.13.
 ## Planned gates
 
 1. **Gate 0 (done):** mock instruments, analysis primitives, recipe/report engine.
-2. **v0.1 (this version):** file import, run records, `open-ece` CLI, end-to-end examples.
+2. **v0.1 (this version, release candidate):** file import, run records, `open-ece` CLI,
+   end-to-end examples. See [docs/V0_1_STATUS.md](docs/V0_1_STATUS.md) for the verification
+   results, limitations and release readiness.
 3. **Gate 1:** one real programmable instrument backend (candidate: Analog Discovery 3), only
    after the software workflow proves useful. It must not change analysis APIs.
 4. **Gate 2:** richer validation specs, regression comparison between runs, desktop/web UI.
