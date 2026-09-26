@@ -1,0 +1,9 @@
+# Acceptance spec for a 1 kHz test-tone capture (levels in FS = fraction of digital full scale).
+name: 1 kHz test tone capture
+description: Tone frequency within 5 Hz, about -9 dBFS RMS, small DC offset and headroom against clipping.
+analysis: signal
+requirements:
+  dominant_frequency_hz: {min: 995, max: 1005}
+  ac_rms: {min: 0.33, max: 0.38}
+  mean: {min: -0.02, max: 0.02}
+  peak_abs: {max: 0.9}

@@ -1,0 +1,9 @@
+# Acceptance spec for the RC low-pass example (R = 10 kOhm, C = 10 nF, nominal fc = 1591.55 Hz).
+# Limits are inclusive and use each result's unit (see `open-ece analyze-bode --help`).
+name: RC low-pass acceptance
+description: First-order RC low-pass, 10 kOhm / 10 nF, cutoff within about 10 % of nominal.
+analysis: bode
+requirements:
+  cutoff_hz: {min: 1450, max: 1750}
+  max_gain_db: {min: -0.5, max: 0.5}
+  phase_at_cutoff_deg: {min: -50, max: -40}

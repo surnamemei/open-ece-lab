@@ -28,3 +28,33 @@ def estimate_cutoff_hz(frequency_hz, mag_db, drop_db: float = 3.0):
             alpha = (target - m1) / (m2 - m1)
             return float(np.exp(np.log(f1) + alpha * (np.log(f2) - np.log(f1))))
     return float("nan")
+
+
+def magnitude_to_db(magnitude):
+    """20*log10 of a linear magnitude (ratio or amplitude); values must be finite and > 0."""
+    m = np.asarray(magnitude, dtype=float)
+    if not np.all(np.isfinite(m)) or np.any(m <= 0):
+        raise ValueError("linear magnitudes must be finite and greater than zero")
+    return 20 * np.log10(m)
+
+
+def unwrap_phase_deg(phase_deg):
+    """Remove 360-degree jumps from a phase curve ordered by frequency."""
+    p = np.asarray(phase_deg, dtype=float)
+    return np.rad2deg(np.unwrap(np.deg2rad(p)))
+
+
+def interpolate_at_frequency(frequency_hz, values, target_hz: float) -> float:
+    """Interpolate ``values`` linearly in log10(frequency) at ``target_hz``.
+
+    Returns NaN when ``target_hz`` is not finite or lies outside the measured range.
+    """
+    f = np.asarray(frequency_hz, dtype=float)
+    v = np.asarray(values, dtype=float)
+    if f.ndim != 1 or v.ndim != 1 or len(f) != len(v) or len(f) < 2:
+        raise ValueError("frequency_hz and values must be equal-length 1-D arrays with >=2 samples")
+    if np.any(f <= 0) or np.any(np.diff(f) <= 0):
+        raise ValueError("frequencies must be positive and strictly increasing")
+    if not np.isfinite(target_hz) or target_hz < f[0] or target_hz > f[-1]:
+        return float("nan")
+    return float(np.interp(np.log10(target_hz), np.log10(f), v))

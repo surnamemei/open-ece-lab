@@ -1,6 +1,15 @@
+"""Presentation of results: HTML reports and figures. Never computes analysis results.
+
+``write_html_report`` is the original Gate 0 minimal report and is kept for compatibility;
+``render_run_report`` renders the full report of a persisted run record.
+"""
 from __future__ import annotations
 from pathlib import Path
 from html import escape
+
+from .html import render_run_report
+
+__all__ = ["render_run_report", "write_html_report"]
 
 def write_html_report(path, title: str, checks, notes: str = ""):
     rows = "".join(

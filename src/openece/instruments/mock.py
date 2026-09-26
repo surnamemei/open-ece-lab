@@ -7,6 +7,7 @@ class MockRCPlant:
     def __init__(self, r_ohm=10_000.0, c_f=10e-9, noise_std=0.002, seed=5305):
         self.r_ohm = float(r_ohm)
         self.c_f = float(c_f)
+        self.seed = seed
         self.rng = np.random.default_rng(seed)
         self.noise_std = float(noise_std)
 
@@ -21,6 +22,8 @@ class MockRCPlant:
         return ideal + noise
 
 class MockSignalGenerator(SignalGenerator):
+    backend = "mock"
+    simulated = True
     def __init__(self):
         self.frequency_hz = 1000.0
         self.amplitude_vpk = 1.0
@@ -31,10 +34,14 @@ class MockSignalGenerator(SignalGenerator):
         self.amplitude_vpk = float(amplitude_vpk)
 
 class MockOscilloscope(Oscilloscope):
+    backend = "mock"
+    simulated = True
     def __init__(self, plant: MockRCPlant): self.plant = plant
     def measure_transfer(self, frequency_hz: float) -> complex: return self.plant.transfer(frequency_hz)
 
 class MockPowerSupply(PowerSupply):
+    backend = "mock"
+    simulated = True
     def __init__(self): self.voltage_v = 0.0
     def set_voltage(self, voltage_v: float):
         if voltage_v < 0: raise ValueError("mock supply only supports non-negative voltage")

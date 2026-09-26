@@ -1,0 +1,12 @@
+# Acceptance spec for the motor speed-loop step example (setpoint 0 -> 1000 rpm).
+name: Motor speed loop step acceptance
+description: Speed loop must settle within 0.4 s with less than 15 % overshoot and 2 % steady-state error.
+analysis: step
+parameters:
+  reference: 1000        # commanded speed in rpm; enables the steady-state error results
+  settling_band: 0.02    # +/-2 % of the step size
+requirements:
+  rise_time_10_90_s: {max: 0.1}
+  overshoot_percent: {max: 15}
+  settling_time_s: {max: 0.4}
+  steady_state_error_percent: {min: -2, max: 2}

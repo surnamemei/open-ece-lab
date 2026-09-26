@@ -1,0 +1,4 @@
+# Example datasets must stay byte-exact on every platform.
+*.wav binary
+*.npy binary
+*.csv text eol=lf

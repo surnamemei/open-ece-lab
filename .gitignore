@@ -6,3 +6,5 @@ __pycache__/
 rc_report.html
 build/
 dist/
+# Run folders created by `open-ece` (measurement records and reports) are local data.
+runs/
